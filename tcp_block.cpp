@@ -37,6 +37,51 @@ struct rst_packet {
 char* redir = "HTTP/1.1 302 Redirct\r\nLocation: http://warning.co.kr/i3.html\r\n\r\n"; 
 char* fake = "HTTP/1.1 200 OK\r\nDate: Mon, 27 Nov 2017 19:00:00 GMT\r\nServer: Apache\r\nContent-Length: 42\r\nConnection: close\r\n Content-Type: text/html\r\n\r\n<html>\r\n<title>Trapcard</title>\r\n</html>\r\n";
 
+void Ip_hd_checksum(libnet_ipv4_hdr* ip_hd) {
+	uint16_t *p = (uint16_t*)ip_hd;
+	int len = 20;
+	uint32_t chksum = 0;
+	len >>= 1;
+	ip_hd->ip_sum = 0;
+	for(int i = 0; i<len;i++){
+		chksum += *p++;
+	}
+
+	chksum = (chksum >> 16) +(chksum & 0xffff);
+	chksum += (chksum >> 16);
+	ip_hd->ip_sum = (~chksum & 0xffff);
+}
+
+void Tcp_checksum(struct rst_packet *rst_hd) {
+	uint16_t *p = (uint16_t *)&(rst_hd->tcp_header);
+	uint16_t *tempip;
+	uint16_t datalen = (ntohs(rst_hd->ip4_header.ip_len)) - LIBNET_IPV4_H ;
+	uint16_t len = datalen;
+	uint32_t chksum = 0;
+	len >>= 1;
+	rst_hd->tcp_header.th_sum = 0;
+	for(int i =0; i<len;i++) {
+		chksum += *p++;
+	}
+
+	if(datalen % 2 == 1) {
+		chksum += *p++ & 0x00ff;
+	}
+	tempip = (uint16_t *)(&rst_hd->ip4_header.ip_dst);
+	for(int i=0;i<2;i++) {
+		chksum += *tempip++;
+	}
+	tempip = (uint16_t *)(&rst_hd->ip4_header.ip_src);
+	for(int i=0;i<2;i++) {
+		chksum += *tempip++;
+	}
+	chksum += htons(6);
+	chksum += htons(datalen);
+	chksum = (chksum >> 16) +(chksum & 0xffff);
+	chksum += (chksum >> 16);
+	rst_hd->tcp_header.th_sum = (~chksum & 0xffff);
+}
+
 
 void make_rst(struct rst_packet *rst) {
 	rst->eth_header.ether_type = htons(ETHERTYPE_IP);
@@ -47,9 +92,10 @@ void make_rst(struct rst_packet *rst) {
 	rst->ip4_header.ip_ttl = 64;
 	rst->ip4_header.ip_p = IPPROTO_TCP;
 	rst->ip4_header.ip_sum = htons(0xabcd);
-	rst->ip4_header.ip_id = htons(0x9876);
+//	rst->ip4_header.ip_id = htons(0x9876);
+	rst->ip4_header.ip_off = htons(IP_DF);
 	rst->tcp_header.th_off = 5;
-	rst->tcp_header.th_flags = TH_RST | TH_ACK; //| TH_ACK;
+	rst->tcp_header.th_flags = TH_RST; //| TH_ACK;
 	rst->tcp_header.th_win = 0;
 	rst->tcp_header.th_sum = 0;
 }
@@ -134,18 +180,26 @@ int main(int argc, char *argv[]) {
 					flag = 0;
 				}
 				if((tcp->th_flags & TH_ACK) != 0 && ((tcp->th_flags & TH_RST)==0) && flag == 0) {
+
 					//Forward RST
 					memcpy(rst_p.eth_header.ether_shost, eth->ether_shost, 6);
 					memcpy(rst_p.eth_header.ether_dhost, eth->ether_dhost, 6);
 					memcpy(&(rst_p.ip4_header.ip_src), &(ip4->ip_src), 4);
 					memcpy(&rst_p.ip4_header.ip_dst, &ip4->ip_dst, 4);
+					memcpy(&rst_p.ip4_header.ip_tos, &ip4->ip_tos, 2);
+					rst_p.ip4_header.ip_id, htons(ntohs(ip4->ip_id)+1);
+
 					memcpy(&rst_p.tcp_header.th_sport, &tcp->th_sport, 2);
 					memcpy(&rst_p.tcp_header.th_dport, &tcp->th_dport, 2);
-					memcpy(&rst_p.tcp_header.th_seq, &tcp->th_ack, 4);
-					rst_p.tcp_header.th_seq = tcp->th_seq + (uint32_t)tcp_payload_len;
-					memset(&rst_p.tcp_header.th_ack, 0, 4);
+					memcpy(&rst_p.tcp_header.th_ack, &tcp->th_ack, 4);
+					memcpy(&rst_p.tcp_header.th_seq, &tcp->th_seq, 4);
+					
 					make_rst(&rst_p);
 					rst_p.ip4_header.ip_len = htons(0x0028);
+
+					Ip_hd_checksum(&(rst_p.ip4_header));
+					Tcp_checksum(&rst_p);
+
 					printf("Send Forward RST_TCP\n");
 					pcap_sendpacket(handle, (uint8_t*)&rst_p, sizeof(struct rst_packet));
 
@@ -158,10 +212,14 @@ int main(int argc, char *argv[]) {
 					memcpy(&rst_p.tcp_header.th_dport, &tcp->th_sport, 2);
 					memcpy(&rst_p.tcp_header.th_seq, &tcp->th_ack, 4);
 					memset(&rst_p.tcp_header.th_ack, 0, 4);
+
 //					memcpy(rst_p.ip4_header.th_ack, (tcp->th_seq + tcp_payload_len), 4);
 //					rst_p.tcp_header.th_ack = tcp->th_seq;
 					rst_p.ip4_header.ip_len = htons(0x0028);
+					rst_p.ip4_header.ip_id, htons(ntohs(ip4->ip_id)+1);
 
+					Ip_hd_checksum(&(rst_p.ip4_header));
+					Tcp_checksum(&rst_p);
 /*
 					printf("______________________Backward RST packet______________________\n");
 					print_ether(rst_p.eth_header.ether_dhost);
@@ -194,8 +252,8 @@ int main(int argc, char *argv[]) {
 */
 					printf("Send Backward RST_TCP\n");
 					pcap_sendpacket(handle, (uint8_t*)&rst_p, sizeof(struct rst_packet));
-					
 				}
+
 				if(((tcp->th_flags & TH_RST)==0) && flag == 1) {
 				//Forward RST
 					memcpy(rst_p.eth_header.ether_shost, eth->ether_shost, 6);
@@ -208,8 +266,8 @@ int main(int argc, char *argv[]) {
 					memset(&rst_p.tcp_header.th_ack, 0, 4);
 					make_rst(&rst_p);
 					rst_p.ip4_header.ip_len = htons(0x0028);
+					rst_p.ip4_header.ip_id, htons(ntohs(ip4->ip_id)+1);
 					printf("Send Forward RST_HTTP\n");
-					pcap_sendpacket(handle, (uint8_t*)&rst_p, sizeof(struct rst_packet));
 					pcap_sendpacket(handle, (uint8_t*)&rst_p, sizeof(struct rst_packet));
 /*
 					//backward RST packet
@@ -239,10 +297,14 @@ int main(int argc, char *argv[]) {
 					memcpy(&fin_p->tcp_header.th_dport, &tcp->th_sport, 2);
 					memcpy(&fin_p->tcp_header.th_seq, &tcp->th_ack, 4);
 					fin_p->tcp_header.th_ack = htonl(ntohl(tcp->th_seq) + (uint32_t)tcp_payload_len);
+					rst_p.ip4_header.ip_id, htons(ntohs(ip4->ip_id)+1);
 //					memcpy(&fin_p->tcp_header.th_ack, &tcp->th_seq + tcp_payload_len, 4);
 					make_rst(fin_p);
 					fin_p->tcp_header.th_flags = (TH_FIN ^ TH_PUSH ^ TH_ACK);
 					memcpy((redir_p + sizeof(rst_packet)),fake,strlen(fake));
+					Ip_hd_checksum(&(fin_p->ip4_header));
+					Tcp_checksum(fin_p);
+
 					printf("Send Backward FIN_HTTP\n");
 					pcap_sendpacket(handle, (uint8_t*)fin_p, sizeof(struct rst_packet) + strlen(fake) );
 
