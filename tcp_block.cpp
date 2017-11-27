@@ -3,18 +3,19 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <libnet.h>
-#pragma pack(1)
+#pragma pack(2)
 
 #define HTTP_REQUEST_FUNCTION 	6
 
-const char method[HTTP_REQUEST_FUNCTION][8] = {"GET","HOST","HEAD","PUT","DELETE","OPTIONS"};
+//const char method[HTTP_REQUEST_FUNCTION][8] = {"GET","HOST","HEAD","PUT","DELETE","OPTIONS"};
+char *get_str = "GET";
 
 struct rst_packet {
 	struct libnet_ethernet_hdr eth_header;
 	//dst mac
 	//src mac
 	//eth_header->ether_type = ETHERTYPE_IP;
-	struct libnet_tcp_hdr tcp_header;
+	struct libnet_ipv4_hdr ip4_header;
 	//ip4_header->ip_v = htons(4);
 	//ip4_header->ip_hl = htons(5);
 	//ip4_header->ip_len = htons(40);
@@ -23,7 +24,7 @@ struct rst_packet {
 	//ip4_header->ip_ttl = 48;
 	//ip4_header->ip_src;
 	//ip4_header->ip_dst;
-	struct libnet_ipv4_hdr ip4_header;
+	struct libnet_tcp_hdr tcp_header;
 	//tcp_header->th_sport; 받은 패킷의 dest port
 	//tcp_header->th_dport; 받은 패킷의 source port
 	//tcp_header->th_seq; 받은 패킷의 ack
@@ -33,18 +34,22 @@ struct rst_packet {
 	//tcp_header->th_win = 0;
 	//tcp_header->th_sum = 0;
 };
+char* redir = "HTTP/1.1 302 Redirct\r\nLocation: http://warning.co.kr/i3.html\r\n\r\n"; 
+char* fake = "HTTP/1.1 200 OK\r\nDate: Mon, 27 Nov 2017 19:00:00 GMT\r\nServer: Apache\r\nContent-Length: 42\r\nConnection: close\r\n Content-Type: text/html\r\n\r\n<html>\r\n<title>Trapcard</title>\r\n</html>\r\n";
+
+
 void make_rst(struct rst_packet *rst) {
 	rst->eth_header.ether_type = htons(ETHERTYPE_IP);
 
-	rst->ip4_header.ip_v = htons(4);
-	rst->ip4_header.ip_hl = htons(5);
-	rst->ip4_header.ip_len = 40;
+	rst->ip4_header.ip_v = 4;
+	rst->ip4_header.ip_hl = 5;
+	rst->ip4_header.ip_len = htons(0x0068 + strlen(fake) - strlen(redir));
+	rst->ip4_header.ip_ttl = 64;
 	rst->ip4_header.ip_p = IPPROTO_TCP;
-	rst->ip4_header.ip_off = IP_DF;
-	rst->ip4_header.ip_ttl = 48;
-
+	rst->ip4_header.ip_sum = htons(0xabcd);
+	rst->ip4_header.ip_id = htons(0x9876);
 	rst->tcp_header.th_off = 5;
-	rst->tcp_header.th_flags = TH_RST;
+	rst->tcp_header.th_flags = TH_RST | TH_ACK; //| TH_ACK;
 	rst->tcp_header.th_win = 0;
 	rst->tcp_header.th_sum = 0;
 }
@@ -63,14 +68,14 @@ void usage() {
 }
 
 int main(int argc, char *argv[]) {
-	int flag = 0;
+	int flag;
 	if(argc != 2) {
 		usage();
 		return -1;
 	}
 	char* dev = argv[1];
 	char errbuf[PCAP_ERRBUF_SIZE];
-	pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
+	pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1, errbuf);
 	struct rst_packet rst_p;
 
 	if (handle == NULL) {
@@ -79,118 +84,86 @@ int main(int argc, char *argv[]) {
 	}
 
 	while(true) {
+		flag = -1;
 		struct pcap_pkthdr* header;
 		const u_char* packet;
 		int res = pcap_next_ex(handle, &header, &packet);
 		if (res == 0) continue;
 		if (res == -1 || res == -2) break;
-
-		printf("\neth header size : %d\n", sizeof(struct libnet_ethernet_hdr));
-		printf("\nip header size : %d\n", sizeof(struct libnet_ipv4_hdr));
-		printf("\ntcp header size : %d\n", sizeof(struct libnet_tcp_hdr));
-
-		printf("\n_______________pcap_next_ex ____________ \n");
-		printf("\nprint REAL packet by HEX: \n");
-
-		for(int j = 0; j < (header->len)/16 ; j++) {
-			for(int i = 0; i < 8; i++) {
-				printf("%02x ", ((uint8_t *)packet)[i+j*16]);
-			}
-			printf("  ");
-			for(int i = 8; i < 16; i++) {
-				printf("%02x ", ((uint8_t *)packet)[i+j*16]);
-			}
-			printf(" \n");
-		}
-
 		struct libnet_ethernet_hdr* eth = (struct libnet_ethernet_hdr *)packet;
 		eth->ether_type = ntohs(eth->ether_type);
-//		printf("이더넷 타입: 0x%04X\n", eth->ether_type);
 		if(eth->ether_type == ETHERTYPE_IP){
-			printf("\nIt's IP\n");
+//			printf("\nIt's IP\n");
 			struct libnet_ipv4_hdr* ip4 = (struct libnet_ipv4_hdr *)(packet + LIBNET_ETH_H );
 //			printf("ip 타입: %d\n", ip4->ip_p);
-
-			char ip_src[INET_ADDRSTRLEN];
-			char ip_dst[INET_ADDRSTRLEN];
-
-    		printf("ip_src : %s\n",inet_ntop(AF_INET, &ip4->ip_src, ip_src, INET_ADDRSTRLEN));
-   			printf("ip_des : %s\n",inet_ntop(AF_INET, &ip4->ip_dst, ip_dst, INET_ADDRSTRLEN));
-
+//			char ip_src[INET_ADDRSTRLEN];
+//			char ip_dst[INET_ADDRSTRLEN];
+//    		printf("ip_src : %s\n",inet_ntop(AF_INET, &ip4->ip_src, ip_src, INET_ADDRSTRLEN));
+// 			printf("ip_des : %s\n",inet_ntop(AF_INET, &ip4->ip_dst, ip_dst, INET_ADDRSTRLEN));
 			if(ip4->ip_p == IPPROTO_TCP){
-				printf("\nIt's TCP\n");
+//				printf("\nIt's TCP\n");
+/*
+				printf("\n_______________TCP packet _______________ \n");
+				printf("\nprint REAL packet by HEX: \n");
 
+				for(int j = 0; j < (header->len)/16 ; j++) {
+					for(int i = 0; i < 8; i++) {
+						printf("%02x ", ((uint8_t *)packet)[i+j*16]);
+					}
+					printf("  ");
+					for(int i = 8; i < 16; i++) {
+						printf("%02x ", ((uint8_t *)packet)[i+j*16]);
+					}
+					printf(" \n");
+				}
+				for(int i = ((header->len)/16)*16; i < header->len; i++) {
+					printf("%02x ", ((uint8_t *)packet)[i]);
+				}
+*/
 				//first check packet is http.request.
 				struct libnet_tcp_hdr* tcp = (struct libnet_tcp_hdr *)(packet + LIBNET_ETH_H + LIBNET_IPV4_H);
 				uint16_t tcp_len = ntohs(ip4->ip_len) - LIBNET_IPV4_H;
 				uint16_t tcp_payload_len = tcp_len - tcp->th_off*4;
-				uint8_t *tcp_payload = (uint8_t *)packet + LIBNET_IPV4_H + tcp->th_off*4;
-				if(tcp_payload_len ==  0) {
-					printf("There is no tcp data\n");
-					flag = 0;
+				uint8_t *tcp_payload = (uint8_t *)packet + LIBNET_ETH_H + LIBNET_IPV4_H + tcp->th_off*4;
+				printf("\nTCP Payload_len : %d\n", tcp_payload_len);
+				if(tcp_payload_len !=  0 && memcmp(tcp_payload, get_str ,strlen(get_str)) == 0) {
+					printf("\nIt's HTTP.request\n");
+					flag = 1;
 				}
 				else {
-					for(int i = 0; i<HTTP_REQUEST_FUNCTION;i++){
-						if(memcmp(tcp_payload, method[i], strlen(method[i]))) {
-							printf("\nIt's HTTP.request\n");
-							printf("tcp_payload_len : %d\n", tcp_payload_len);
-							flag = 1;
-							break;
-						}
-						else{
-							flag = 0;
-						}
-					}
+					flag = 0;
 				}
-
-				if(flag == 0) {
+				if((tcp->th_flags & TH_ACK) != 0 && ((tcp->th_flags & TH_RST)==0) && flag == 0) {
 					//Forward RST
 					memcpy(rst_p.eth_header.ether_shost, eth->ether_shost, 6);
 					memcpy(rst_p.eth_header.ether_dhost, eth->ether_dhost, 6);
-
 					memcpy(&(rst_p.ip4_header.ip_src), &(ip4->ip_src), 4);
 					memcpy(&rst_p.ip4_header.ip_dst, &ip4->ip_dst, 4);
-
 					memcpy(&rst_p.tcp_header.th_sport, &tcp->th_sport, 2);
 					memcpy(&rst_p.tcp_header.th_dport, &tcp->th_dport, 2);
-					memcpy(&rst_p.tcp_header.th_seq, &tcp->th_seq, 4);
-					memcpy(&rst_p.tcp_header.th_ack, &tcp->th_ack, 4);
+					memcpy(&rst_p.tcp_header.th_seq, &tcp->th_ack, 4);
+					rst_p.tcp_header.th_seq = tcp->th_seq + (uint32_t)tcp_payload_len;
+					memset(&rst_p.tcp_header.th_ack, 0, 4);
 					make_rst(&rst_p);
-
+					rst_p.ip4_header.ip_len = htons(0x0028);
+					printf("Send Forward RST_TCP\n");
 					pcap_sendpacket(handle, (uint8_t*)&rst_p, sizeof(struct rst_packet));
 
 					//Backward RST
-					
 					memcpy(&rst_p.eth_header.ether_shost, &eth->ether_dhost, 6);
 					memcpy(&rst_p.eth_header.ether_dhost, &eth->ether_shost, 6);
-
 					memcpy(&rst_p.ip4_header.ip_src, &ip4->ip_dst, 4);
 					memcpy(&rst_p.ip4_header.ip_dst, &ip4->ip_src, 4);
-
 					memcpy(&rst_p.tcp_header.th_sport, &tcp->th_dport, 2);
 					memcpy(&rst_p.tcp_header.th_dport, &tcp->th_sport, 2);
 					memcpy(&rst_p.tcp_header.th_seq, &tcp->th_ack, 4);
-//					memcpy(rst_p.ip4_header.th_ack, (tcp->th_seq + tcp_payload_len), 4);
 					memset(&rst_p.tcp_header.th_ack, 0, 4);
+//					memcpy(rst_p.ip4_header.th_ack, (tcp->th_seq + tcp_payload_len), 4);
+//					rst_p.tcp_header.th_ack = tcp->th_seq;
+					rst_p.ip4_header.ip_len = htons(0x0028);
 
-					pcap_sendpacket(handle, (uint8_t*)&rst_p, sizeof(struct rst_packet));
-					
-				}
-				if(flag == 1) {
-				//Forward RST
-					memcpy(rst_p.eth_header.ether_shost, eth->ether_shost, 6);
-					memcpy(rst_p.eth_header.ether_dhost, eth->ether_dhost, 6);
-
-					memcpy(&(rst_p.ip4_header.ip_src), &(ip4->ip_src), 4);
-					memcpy(&rst_p.ip4_header.ip_dst, &ip4->ip_dst, 4);
-
-					memcpy(&rst_p.tcp_header.th_sport, &tcp->th_sport, 2);
-					memcpy(&rst_p.tcp_header.th_dport, &tcp->th_dport, 2);
-					memcpy(&rst_p.tcp_header.th_seq, &tcp->th_seq, 4);
-					memcpy(&rst_p.tcp_header.th_ack, &tcp->th_ack, 4);
-					make_rst(&rst_p);
-
-					printf("---------------RST packet--------------------\n");
+/*
+					printf("______________________Backward RST packet______________________\n");
 					print_ether(rst_p.eth_header.ether_dhost);
 					print_ether(rst_p.eth_header.ether_shost);
 					printf("ether type : 0x%04x\n", rst_p.eth_header.ether_type);
@@ -199,13 +172,11 @@ int main(int argc, char *argv[]) {
 					printf("ip_version(4) : %x\n", rst_p.ip4_header.ip_v);
 					printf("ip_hl(5) : %x\n", rst_p.ip4_header.ip_hl);
 					printf("ip_len(40) : %04x\n", rst_p.ip4_header.ip_len);
-
 					printf("ack num: 0x%08x\n",ntohl(rst_p.tcp_header.th_ack));
 					printf("seq num: 0x%08x\n",ntohl(rst_p.tcp_header.th_seq));
-
-
 					printf("\nprint RST packet by HEX: \n");
-					printf("size of rst_packet: %d\n", sizeof(struct rst_packet));
+
+//					printf("size of rst_packet: %d\n", sizeof(struct rst_packet));
 					for(int j = 0; j < sizeof(struct rst_packet)/16 ; j++) {
 						for(int i = 0; i < 8; i++) {
 							printf("%02x ", ((uint8_t *)&rst_p)[i+j*16]);
@@ -216,23 +187,97 @@ int main(int argc, char *argv[]) {
 						}
 						printf(" \n");
 					}
-
-
-					for(int i = (sizeof(struct rst_packet)/16)*16; i < (sizeof(struct rst_packet)/16)*16+ sizeof(struct rst_packet)%16; i++) {
+					for(int i = (sizeof(struct rst_packet)/16)*16; i < sizeof(struct rst_packet); i++) {
 						printf("%02x ", ((uint8_t *)&rst_p)[i]);
 					}
-
 					printf("\n\n");
-
+*/
+					printf("Send Backward RST_TCP\n");
 					pcap_sendpacket(handle, (uint8_t*)&rst_p, sizeof(struct rst_packet));
+					
+				}
+				if(((tcp->th_flags & TH_RST)==0) && flag == 1) {
+				//Forward RST
+					memcpy(rst_p.eth_header.ether_shost, eth->ether_shost, 6);
+					memcpy(rst_p.eth_header.ether_dhost, eth->ether_dhost, 6);
+					memcpy(&(rst_p.ip4_header.ip_src), &(ip4->ip_src), 4);
+					memcpy(&rst_p.ip4_header.ip_dst, &ip4->ip_dst, 4);
+					memcpy(&rst_p.tcp_header.th_sport, &tcp->th_sport, 2);
+					memcpy(&rst_p.tcp_header.th_dport, &tcp->th_dport, 2);
+					rst_p.tcp_header.th_seq = tcp->th_seq + (uint32_t)tcp_payload_len;
+					memset(&rst_p.tcp_header.th_ack, 0, 4);
+					make_rst(&rst_p);
+					rst_p.ip4_header.ip_len = htons(0x0028);
+					printf("Send Forward RST_HTTP\n");
+					pcap_sendpacket(handle, (uint8_t*)&rst_p, sizeof(struct rst_packet));
+					pcap_sendpacket(handle, (uint8_t*)&rst_p, sizeof(struct rst_packet));
+/*
+					//backward RST packet
+					memcpy(rst_p.eth_header.ether_shost, eth->ether_dhost, 6);
+					memcpy(rst_p.eth_header.ether_dhost, eth->ether_shost, 6);
+					memcpy(&(rst_p.ip4_header.ip_src), &(ip4->ip_dst), 4);
+					memcpy(&rst_p.ip4_header.ip_dst, &ip4->ip_src, 4);
+					memcpy(&rst_p.tcp_header.th_sport, &tcp->th_dport, 2);
+					memcpy(&rst_p.tcp_header.th_dport, &tcp->th_sport, 2);
+					memcpy(&rst_p.tcp_header.th_seq, &tcp->th_ack, 4);
+//					memcpy(&rst_p.tcp_header.th_ack, &tcp->th_ack, 4);
+					memset(&rst_p.tcp_header.th_ack, 0, 4);
+					make_rst(&rst_p);
+					rst_p.ip4_header.ip_len = htons(0x0028);
+					printf("Send Backward RST_HTTP\n");
+					pcap_sendpacket(handle, (uint8_t*)&rst_p, sizeof(struct rst_packet));
+*/
+					//Backward FIN redirect.
+					void* redir_p = malloc(sizeof(rst_packet) + strlen(fake));
+					struct rst_packet* fin_p = (struct rst_packet *)redir_p;
 
-				//Backward FIN redirect.
+					memcpy(fin_p->eth_header.ether_shost, eth->ether_dhost, 6);
+					memcpy(fin_p->eth_header.ether_dhost, eth->ether_shost, 6);
+					memcpy(&(fin_p->ip4_header.ip_src), &(ip4->ip_dst), 4);
+					memcpy(&fin_p->ip4_header.ip_dst, &ip4->ip_src, 4);
+					memcpy(&fin_p->tcp_header.th_sport, &tcp->th_dport, 2);
+					memcpy(&fin_p->tcp_header.th_dport, &tcp->th_sport, 2);
+					memcpy(&fin_p->tcp_header.th_seq, &tcp->th_ack, 4);
+					fin_p->tcp_header.th_ack = htonl(ntohl(tcp->th_seq) + (uint32_t)tcp_payload_len);
+//					memcpy(&fin_p->tcp_header.th_ack, &tcp->th_seq + tcp_payload_len, 4);
+					make_rst(fin_p);
+					fin_p->tcp_header.th_flags = (TH_FIN ^ TH_PUSH ^ TH_ACK);
+					memcpy((redir_p + sizeof(rst_packet)),fake,strlen(fake));
+					printf("Send Backward FIN_HTTP\n");
+					pcap_sendpacket(handle, (uint8_t*)fin_p, sizeof(struct rst_packet) + strlen(fake) );
 
+					/*
+					printf("______________________Backward FIN Redirection packet______________________\n");
+					printf("source mac: ");
+					print_ether(fin_p->eth_header.ether_shost);
+					printf("dst mac: ");
+					print_ether(fin_p->eth_header.ether_dhost);
+					printf("ether type : 0x%04x\n", fin_p->eth_header.ether_type);
+					printf("ip_version(4) : %x\n", fin_p->ip4_header.ip_v);
+					printf("ip_hl(5) : %x\n", fin_p->ip4_header.ip_hl);
+					printf("ip_len(40) : %04x\n", fin_p->ip4_header.ip_len);
+					printf("ack num: 0x%08x\n",ntohl(fin_p->tcp_header.th_ack));
+					printf("seq num: 0x%08x\n",ntohl(fin_p->tcp_header.th_seq));
+
+
+					for(int j = 0; j < (sizeof(rst_packet) + strlen(redir))/16 ; j++) {
+						for(int i = 0; i < 8; i++) {
+							printf("%02x ", ((uint8_t *)fin_p)[i+j*16]);
+						}
+						printf("  ");
+						for(int i = 8; i < 16; i++) {
+							printf("%02x ", ((uint8_t *)fin_p)[i+j*16]);
+						}
+						printf(" \n");
+					}
+
+					for(int i = ((sizeof(rst_packet) + strlen(redir))/16)*16; i < (sizeof(rst_packet) + strlen(redir)); i++) {
+						printf("%02x ", ((uint8_t *)fin_p)[i]);
+					}
+					printf("\n\n");
+					*/
 				}
 			}
-
-
-
 		}
 	}
 
