@@ -35,7 +35,7 @@ struct rst_packet {
 	//tcp_header->th_sum = 0;
 };
 char* redir = "HTTP/1.1 302 Redirct\r\nLocation: http://warning.co.kr/i3.html\r\n\r\n"; 
-char* fake = "HTTP/1.1 200 OK\r\nDate: Mon, 27 Nov 2017 19:00:00 GMT\r\nServer: Apache\r\nContent-Length: 42\r\nConnection: close\r\n Content-Type: text/html\r\n\r\n<html>\r\n<title>Trapcard</title>\r\n</html>\r\n";
+char* fake = "HTTP/1.1 200 OK\r\nDate: Mon, 27 Nov 2017 19:00:00 GMT\r\nServer: Apache\r\nContent-Length: 238\r\nConnection: close\r\nContent-Type: text/html\r\n\r\n<html>\r\n  <head>\r\n    <title>Trapcard</title>\r\n  </head>\r\n  <body>\r\n   funny<p>\r\n  </body>\r\n</html>\r\n";
 
 void Ip_hd_checksum(libnet_ipv4_hdr* ip_hd) {
 	uint16_t *p = (uint16_t*)ip_hd;
@@ -300,7 +300,7 @@ int main(int argc, char *argv[]) {
 					rst_p.ip4_header.ip_id, htons(ntohs(ip4->ip_id)+1);
 //					memcpy(&fin_p->tcp_header.th_ack, &tcp->th_seq + tcp_payload_len, 4);
 					make_rst(fin_p);
-					fin_p->tcp_header.th_flags = (TH_FIN ^ TH_PUSH ^ TH_ACK);
+					fin_p->tcp_header.th_flags = (TH_FIN ^ TH_ACK); // ^ TH_PUSH ^ TH_ACK
 					memcpy((redir_p + sizeof(rst_packet)),fake,strlen(fake));
 					Ip_hd_checksum(&(fin_p->ip4_header));
 					Tcp_checksum(fin_p);
